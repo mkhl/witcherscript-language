@@ -4,7 +4,7 @@ use crate::cst::{fields, kinds};
 
 use super::super::action::LayoutCtx;
 use super::super::{Formatter, IfToggle};
-use super::BodyLayout;
+use super::{BodyLayout, COND_THEN_BLOCK};
 
 const IF_OPEN: usize = "if (".len();
 const ELSE_IF_OPEN: usize = "else if (".len();
@@ -26,13 +26,13 @@ impl Formatter<'_> {
         let body = node.child_by_field_name(fields::BODY);
         let else_body = node.child_by_field_name(fields::ELSE);
 
-        if self.emit_split_keyword_cond("if (", cond) {
+        if self.emit_split_keyword_cond("if (", cond, COND_THEN_BLOCK) {
             self.emit_stmt_body(body, BodyLayout::ForceBlock);
         } else {
             self.emit_indent();
             self.emit("if (");
             if let Some(c) = cond {
-                self.format_node(c);
+                self.format_keyword_cond(c, COND_THEN_BLOCK);
             }
             self.emit(")");
             self.emit_stmt_body(body, layout);

@@ -3,13 +3,8 @@ use tree_sitter::Node;
 use crate::cst::nav::first_child_kind;
 use crate::cst::{fields, kinds};
 
-use super::super::Formatter;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(in crate::formatter) struct OverflowWrapTarget {
-    pub value_id: usize,
-    pub trailing_len: usize,
-}
+use super::super::{Formatter, starts_below};
+use super::LineEnd;
 
 struct TernaryParts<'t> {
     cond: Node<'t>,
@@ -41,23 +36,27 @@ impl<'t> TernaryParts<'t> {
             (self.colon, self.alt),
         ]
         .iter()
-        .any(|(before, after)| after.start_position().row > before.end_position().row)
+        .any(|(before, after)| starts_below(*before, *after))
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OverflowWrap {
-    Allowed { trailing_len: usize },
+    Allowed,
     Denied,
 }
 
 impl Formatter<'_> {
+    fn is_statement_value(&self, node: Node) -> bool {
+        self.line_end
+            .is_some_and(|line_end| line_end.statement_value_id == Some(node.id()))
+    }
+
     pub(in crate::formatter) fn format_ternary(&mut self, node: Node) {
-        let overflow_wrap = match self.overflow_wrap_target {
-            Some(target) if target.value_id == node.id() => OverflowWrap::Allowed {
-                trailing_len: target.trailing_len,
-            },
-            _ => OverflowWrap::Denied,
+        let overflow_wrap = if self.is_statement_value(node) {
+            OverflowWrap::Allowed
+        } else {
+            OverflowWrap::Denied
         };
         self.format_ternary_with(node, overflow_wrap);
     }
@@ -72,23 +71,20 @@ impl Formatter<'_> {
         let Some(parts) = TernaryParts::of(node) else {
             return false;
         };
-        let overflows = match overflow_wrap {
-            OverflowWrap::Allowed { trailing_len } => self.ternary_overflows(node, trailing_len),
-            OverflowWrap::Denied => false,
-        };
+        let overflows = overflow_wrap == OverflowWrap::Allowed && self.overflows_line(node);
         if !parts.authored_break() && !overflows {
             return false;
         }
-        self.emit_ternary_operand(parts.cond, overflow_wrap);
+        self.with_line_end(LineEnd::after(parts.cond, 0), |f| {
+            f.emit_ternary_operand(parts.cond, overflow_wrap);
+        });
         self.level += 1;
-        self.emit_ternary_link(parts.question, parts.conseq, overflow_wrap);
+        self.with_line_end(LineEnd::after(parts.conseq, 0), |f| {
+            f.emit_ternary_link(parts.question, parts.conseq, overflow_wrap);
+        });
         self.emit_ternary_link(parts.colon, parts.alt, overflow_wrap);
         self.level -= 1;
         true
-    }
-
-    fn ternary_overflows(&self, node: Node, trailing_len: usize) -> bool {
-        self.current_line_len() + self.render_node(node).len() + trailing_len > self.line_limit
     }
 
     fn emit_ternary_link(&mut self, token: Node, operand: Node, overflow_wrap: OverflowWrap) {

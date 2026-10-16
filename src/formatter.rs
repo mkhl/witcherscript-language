@@ -2,7 +2,7 @@ use serde::Deserialize;
 use tree_sitter::Node;
 
 use crate::cst::{fields, kinds};
-use expressions::OverflowWrapTarget;
+use expressions::LineEnd;
 
 mod action;
 mod core;
@@ -147,8 +147,8 @@ fn collect_chain_parts<'t>(node: Node<'t>, parts: &mut Vec<ChainPart<'t>>) {
             collect_chain_parts(left, parts);
             if let Some(last) = parts.last_mut() {
                 last.op = Some(op);
-                last.break_after = right.start_position().row > left.end_position().row;
-                last.op_leads = op_node.start_position().row > left.end_position().row;
+                last.break_after = starts_below(left, right);
+                last.op_leads = starts_below(left, op_node);
             }
             collect_chain_parts(right, parts);
             return;
@@ -160,6 +160,10 @@ fn collect_chain_parts<'t>(node: Node<'t>, parts: &mut Vec<ChainPart<'t>>) {
         break_after: false,
         op_leads: false,
     });
+}
+
+pub(super) fn starts_below(before: Node, after: Node) -> bool {
+    after.start_position().row > before.end_position().row
 }
 
 pub(super) fn split_binary_chain(node: Node) -> Vec<ChainPart> {
@@ -175,25 +179,6 @@ pub(super) fn chain_fully_broken(parts: &[ChainPart]) -> bool {
 
 pub(super) fn chain_has_break(parts: &[ChainPart]) -> bool {
     parts.iter().any(|p| p.break_after)
-}
-
-// The first break sets the whole chain's operator placement; later splits follow it.
-pub(super) fn chain_operator_leads(parts: &[ChainPart]) -> bool {
-    parts
-        .iter()
-        .find(|p| p.break_after)
-        .is_some_and(|p| p.op_leads)
-}
-
-pub(super) fn splittable_call(node: Node) -> Option<(Node, Node)> {
-    if node.kind() != kinds::FUNC_CALL_EXPR {
-        return None;
-    }
-    let func = node.child_by_field_name(fields::FUNC)?;
-    let args = node.child_by_field_name(fields::ARGS)?;
-    let mut cursor = args.walk();
-    let has_separator = args.children(&mut cursor).any(|c| c.kind() == ",");
-    has_separator.then_some((func, args))
 }
 
 pub(super) use crate::cst::nav::{child_nodes, named_child_nodes};
@@ -252,10 +237,14 @@ pub(super) fn blank_line_between_rows(prev: usize, next: usize) -> bool {
     next.saturating_sub(prev) >= 2
 }
 
-pub(super) fn comment_in_range(comments: &[Node], lo: usize, hi: usize) -> bool {
+pub(super) fn comments_in_range<'c, 't>(
+    comments: &'c [Node<'t>],
+    lo: usize,
+    hi: usize,
+) -> impl Iterator<Item = &'c Node<'t>> {
     comments
         .iter()
-        .any(|c| c.start_byte() >= lo && c.start_byte() < hi)
+        .filter(move |c| c.start_byte() >= lo && c.start_byte() < hi)
 }
 
 fn collect_comments(root: Node) -> Vec<Node> {
@@ -295,7 +284,7 @@ pub fn format_document(root: Node, source: &str, options: FormatOptions) -> Stri
         colon_align_col: None,
         comments: collect_comments(root),
         comment_cursor: 0,
-        overflow_wrap_target: None,
+        line_end: None,
     };
     f.format_node(root);
     f.flush_comments_before(usize::MAX);
@@ -323,5 +312,5 @@ struct Formatter<'a> {
     // Source-ordered comments; the sweep emits each just before the next node past it.
     comments: Vec<Node<'a>>,
     comment_cursor: usize,
-    overflow_wrap_target: Option<OverflowWrapTarget>,
+    line_end: Option<LineEnd>,
 }

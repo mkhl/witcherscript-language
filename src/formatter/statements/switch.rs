@@ -4,8 +4,9 @@ use crate::cst::{fields, kinds};
 
 use super::super::action::LayoutCtx;
 use super::super::{
-    Formatter, SwitchToggle, blank_line_between_rows, child_nodes, comment_in_range,
+    Formatter, SwitchToggle, blank_line_between_rows, child_nodes, comments_in_range,
 };
+use super::COND_THEN_BLOCK;
 
 // Spaces between aligned switch-arm columns (label -> statement -> break).
 const SWITCH_CELL_GAP: usize = 2;
@@ -104,13 +105,13 @@ pub(super) fn format_switch_stmt(f: &mut Formatter<'_>, node: Node) {
 impl Formatter<'_> {
     pub(in crate::formatter) fn format_switch_stmt_impl(&mut self, node: Node) {
         let cond = node.child_by_field_name(fields::COND);
-        if self.emit_split_keyword_cond("switch (", cond) {
+        if self.emit_split_keyword_cond("switch (", cond, COND_THEN_BLOCK) {
             self.emit(" {\n");
         } else {
             self.emit_indent();
             self.emit("switch (");
             if let Some(c) = cond {
-                self.format_node(c);
+                self.format_keyword_cond(c, COND_THEN_BLOCK);
             }
             self.emit(") {\n");
         }
@@ -258,15 +259,13 @@ impl Formatter<'_> {
             return false;
         };
         // Only an own-line comment explains the row gap; a trailing one shares arm a's last row.
-        self.comments
-            .iter()
-            .any(|c| c.start_byte() >= e && c.start_byte() < s && c.start_position().row > a_end)
+        comments_in_range(&self.comments, e, s).any(|c| c.start_position().row > a_end)
     }
 }
 
 fn arm_has_interior_comment(arm: &SwitchArm, comments: &[Node]) -> bool {
     match (arm_start_byte(arm), arm_end_byte(arm)) {
-        (Some(start), Some(end)) => comment_in_range(comments, start, end),
+        (Some(start), Some(end)) => comments_in_range(comments, start, end).next().is_some(),
         _ => false,
     }
 }

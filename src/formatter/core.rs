@@ -2,7 +2,7 @@ use tree_sitter::Node;
 
 use crate::cst::kinds;
 
-use super::{ColonSpacing, Formatter, child_nodes, comment_in_range, is_expr_node};
+use super::{ColonSpacing, Formatter, child_nodes, comments_in_range, is_expr_node};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CommentPlacement {
@@ -92,7 +92,14 @@ impl<'a> Formatter<'a> {
     }
 
     pub(super) fn has_interior_comment(&self, node: Node) -> bool {
-        comment_in_range(&self.comments, node.start_byte(), node.end_byte())
+        comments_in_range(&self.comments, node.start_byte(), node.end_byte())
+            .next()
+            .is_some()
+    }
+
+    pub(super) fn has_line_comment_between(&self, open: Node, close: Node) -> bool {
+        comments_in_range(&self.comments, open.end_byte(), close.start_byte())
+            .any(|c| is_line_comment(self.text(*c)))
     }
 
     pub(super) fn flush_before_close(&mut self, close: Option<Node>) {
@@ -210,6 +217,7 @@ impl<'a> Formatter<'a> {
             kinds::SWITCH_STMT => self.format_switch_stmt(node),
             kinds::EXPR_STMT => self.format_expr_stmt(node),
             kinds::TERNARY_COND_EXPR => self.format_ternary(node),
+            kinds::FUNC_CALL_EXPR => self.format_call(node),
             _ if is_expr_node(node.kind()) => self.format_children(node),
             _ => self.format_children(node),
         }
@@ -307,6 +315,20 @@ impl<'a> Formatter<'a> {
 
     // Render a subtree to a String (no indentation/newlines) - used for line-length measurement
     pub(super) fn render_node(&self, node: Node) -> String {
+        self.render_span(node, node.start_byte(), node.end_byte())
+    }
+
+    pub(super) fn render_span_from(&self, node: Node, end_byte: usize) -> String {
+        let mut scope = node;
+        while scope.end_byte() < end_byte
+            && let Some(parent) = scope.parent()
+        {
+            scope = parent;
+        }
+        self.render_span(scope, node.start_byte(), end_byte)
+    }
+
+    fn render_span(&self, node: Node, start_byte: usize, end_byte: usize) -> String {
         if node.is_missing() {
             return String::new();
         }
@@ -316,11 +338,11 @@ impl<'a> Formatter<'a> {
         if node.child_count() == 0 {
             return self.text(node).to_string();
         }
-        let children = child_nodes(node);
         let mut s = String::new();
         let mut prev: Option<Node> = None;
-        for child in &children {
-            if child.is_missing() {
+        for child in &child_nodes(node) {
+            let outside = child.end_byte() <= start_byte || child.start_byte() >= end_byte;
+            if child.is_missing() || outside {
                 continue;
             }
             if let Some(p) = prev
@@ -328,11 +350,7 @@ impl<'a> Formatter<'a> {
             {
                 s.push(' ');
             }
-            if child.child_count() == 0 {
-                s.push_str(self.text(*child));
-            } else {
-                s.push_str(&self.render_node(*child));
-            }
+            s.push_str(&self.render_span(*child, start_byte, end_byte));
             prev = Some(*child);
         }
         s
