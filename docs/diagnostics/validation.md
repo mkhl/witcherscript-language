@@ -25,8 +25,8 @@ In addition to tree-sitter parse errors, the LSP server publishes the following 
 | 17  | `type_used_as_value`               | error    | Type name (class, struct, enum, native type) used in a value position                              |
 | 18  | `type_mismatch`                    | error    | A value's type is not assignable to the target slot                                                |
 | 19  | `string_as_name_default`           | info     | A `name`/`CName` field default uses a string literal where a name literal is intended              |
-| 20  | `native_instantiation`             | error    | `new T` on a native engine type (`CBehTreeVal*`), which cannot be instantiated                     |
-| 21  | `native_default_coercion`          | info     | A native engine type (`CBehTreeVal*`) `default` uses a non-exact primitive (accepted, but coerced) |
+| 20  | `native_instantiation`             | error    | `new T` on a native simple type (e.g. `CDateTime`), which cannot be instantiated                   |
+| 21  | `native_default_coercion`          | info     | A `CBehTreeVal*` struct `default` uses a non-exact primitive (accepted, but coerced)               |
 | 22  | `struct_property_access_modifier`  | error    | An accessibility modifier (`private`/`protected`/`public`) is applied to a struct property         |
 | 23  | `state_owner_not_statemachine`     | warning  | `state X in Owner` where `Owner` is a class missing the `statemachine` keyword                     |
 | 24  | `state_owner_not_class`            | error    | `state X in Owner` where `Owner` resolves to something that is not a class (e.g. a struct or enum) |
@@ -46,6 +46,8 @@ In addition to tree-sitter parse errors, the LSP server publishes the following 
 | 38  | `parent_outside_state`             | error    | `parent` / `virtual_parent` used outside a state method                                            |
 | 39  | `cast_in_var_init`                 | error    | A cast to a non-primitive type appears anywhere in a local `var` initializer                       |
 | 40  | `hex_default_zero`                 | warning  | A hex value in a class `default`, which always evaluates to 0                                      |
+| 41  | `native_not_imported`              | info     | Native function or member used without an `import`                                                 |
+| 42  | `unknown_native_import`            | error    | `import` of a function, type, or member the engine doesn't have                                    |
 
 ## Details
 
@@ -174,23 +176,17 @@ The sized engine integer spellings (`Int16`, `Int8`, `Uint16`, `Uint32`, `Uint64
 
 Sites where either the value's type or the target's type cannot be inferred with confidence emit nothing, as do sites inside a tree-sitter error subtree, to avoid false positives while typing. A target whose name does not resolve to a known type (including the unsubstituted generic element of `array<T>` methods) is treated as unknown and skipped. Calls with more arguments than declared parameters, or with an empty argument slot, are skipped.
 
-#### Engine `CBehTreeVal*` wrappers
-
-The native types `CBehTreeValBool`, `CBehTreeValInt`, `CBehTreeValFloat`, `CBehTreeValString`, and `CBehTreeValCName` receive a value only through a `default` initializer (or a native `out` parameter). A `default` accepts _any_ primitive (the engine coerces it); the exact primitive - `bool`, `int`, `float` (also `int`), `string`, and `name` respectively - is silent, and anything else is `native_default_coercion` (info, never an error). Outside a `default` (e.g. `wrapper = value;`) they accept nothing, matching the compiler.
-
-These five are modelled as a distinct `NativeType` kind, not classes: they take no object-to-bool / to-string / `NULL` casts and cannot be `new`-instantiated (see `native_instantiation`).
-
 ### 19. String literal as a name default
 
 A `name`/`CName` field default whose value is a double-quoted string literal, e.g. `default someVar = "Swimming";`. The compiler accepts this as a compile-time constant `name`, so it is not a type error here (unlike a `var` initializer or an assignment, where `string` -> `name` is reported as `type_mismatch`). It is surfaced at info level because a name literal (`'Swimming'`) is the intended form.
 
 ### 20. Native type instantiation
 
-A `new T` expression where `T` is a native engine type (`CBehTreeValBool`, `CBehTreeValInt`, `CBehTreeValFloat`, `CBehTreeValString`, `CBehTreeValCName`). These are C++ value types with no script constructor, so they cannot be instantiated from WitcherScript; a value reaches them only through a `default` initializer or a native `out` parameter.
+A `new T` expression where `T` is a native simple type (an `N` row in `builtins/rtti.tsv`, e.g. `CDateTime`). These are C++ value types with no script constructor, so they cannot be instantiated from WitcherScript.
 
 ### 21. Native default coercion
 
-A `CBehTreeVal*` `default` whose value is a primitive other than the type's exact one (e.g. `default someBool = 5;` on a `CBehTreeValBool`). The engine accepts any primitive constant here, so it is not an error; it is info-level because the value is coerced rather than an exact match. `CBehTreeValFloat` treats both `int` and `float` as exact.
+A `CBehTreeVal*` `default` whose value is a primitive other than the type's exact one (e.g. `default someBool = 5;` on a `CBehTreeValBool`). The compiler accepts any primitive constant here. `CBehTreeValFloat` treats both `int` and `float` as exact.
 
 ### 22. Accessibility modifier on a struct property
 
@@ -271,3 +267,11 @@ An explicit cast to a non-primitive type in a local `var` initializer, e.g. `var
 ### 40. Hex literal in a default value
 
 A hex literal in a `default` value. The compiler evaluates it to `0`.
+
+### 41. Native not imported
+
+An engine function or member used without an `import` for it. The compiler allows this.
+
+### 42. Unknown native import
+
+An `import` of something not in `builtins/`. Skipped when builtins aren't loaded.
