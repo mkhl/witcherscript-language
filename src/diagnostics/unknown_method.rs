@@ -8,6 +8,7 @@ use crate::cst::nav::first_named_child;
 use crate::document::ParsedDocument;
 use crate::resolve::{SymbolDb, infer_type_memo};
 use crate::symbols::AccessLevel;
+use crate::types::lookup_ctor;
 
 use super::native_import::{NativeName, native_not_imported};
 use super::{
@@ -77,7 +78,7 @@ fn check_method_call<'tree>(node: Node<'tree>, ctx: &mut CstRuleCtx<'_, 'tree>) 
     };
 
     ctx.telemetry.top_level_lookups += 1;
-    let Some(top) = ctx.db.find_top_level(&receiver_type) else {
+    let Some(top) = ctx.db.find_top_level(lookup_ctor(&receiver_type)) else {
         return;
     };
 

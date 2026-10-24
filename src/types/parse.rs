@@ -40,10 +40,17 @@ pub(super) fn from_annotation(s: &str) -> Type {
     if trimmed == "void" {
         return Type::Void;
     }
-    if let Some((ctor, element)) = parse_generic_type(trimmed)
-        && ctor == "array"
-    {
-        return Type::Array(Box::new(from_annotation(element)));
+    if let Some((ctor, args)) = parse_generic_type(trimmed) {
+        match (ctor, split_type_args(args).as_slice()) {
+            ("array", [element]) => return Type::Array(Box::new(from_annotation(element))),
+            ("map", [key, value]) => {
+                return Type::Map(
+                    Box::new(from_annotation(key)),
+                    Box::new(from_annotation(value)),
+                );
+            }
+            _ => {}
+        }
     }
     if let Some(prim) = PRIMITIVE_ALIASES
         .iter()
@@ -53,6 +60,25 @@ pub(super) fn from_annotation(s: &str) -> Type {
         return Type::Primitive(prim);
     }
     Type::Named(trimmed.to_string())
+}
+
+fn split_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, c) in args.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(args[start..].trim());
+    parts
 }
 
 pub fn is_builtin_type_name(name: &str) -> bool {

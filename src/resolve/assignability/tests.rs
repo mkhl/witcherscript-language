@@ -200,6 +200,66 @@ fn arrays_are_invariant() {
 }
 
 #[test]
+fn maps_are_invariant() {
+    let t = TestDb::new(TYPES_SRC);
+    let map_of = |key: Type, value: Type| Type::Map(Box::new(key), Box::new(value));
+    let int_to_float = map_of(prim(Primitive::Int), prim(Primitive::Float));
+    for (target, expected) in [
+        (int_to_float.clone(), Assignability::Identical),
+        (
+            map_of(prim(Primitive::Int), prim(Primitive::Int)),
+            Assignability::Incompatible,
+        ),
+        (
+            map_of(prim(Primitive::Byte), prim(Primitive::Float)),
+            Assignability::Incompatible,
+        ),
+        (
+            Type::Array(Box::new(prim(Primitive::Float))),
+            Assignability::Incompatible,
+        ),
+    ] {
+        assert_eq!(
+            assignability(&int_to_float, &target, &t.db()),
+            expected,
+            "map<int, float> -> {target}"
+        );
+    }
+}
+
+#[test]
+fn map_values_do_not_upcast() {
+    let t = TestDb::new(TYPES_SRC);
+    let map_of = |value: &str| {
+        Type::Map(
+            Box::new(prim(Primitive::Int)),
+            Box::new(Type::Named(value.into())),
+        )
+    };
+    assert_eq!(
+        assignability(&map_of("Derived"), &map_of("Base"), &t.db()),
+        Assignability::Incompatible,
+        "map values must not upcast"
+    );
+}
+
+#[test]
+fn map_aliases_are_identical() {
+    let t = TestDb::new(TYPES_SRC);
+    for (from, to) in [
+        ("map<CName, Int32>", "map<name, int>"),
+        ("map<int, float>", "map<int, float>"),
+    ] {
+        let (from, to) = (Type::from_annotation(from), Type::from_annotation(to));
+        assert_eq!(
+            assignability(&from, &to, &t.db()),
+            Assignability::Identical,
+            "{from} -> {to}"
+        );
+    }
+}
+
+#[test]
 fn objects_cast_to_bool_and_string() {
     let t = TestDb::new(TYPES_SRC);
     for name in ["Base", "Derived", "Active"] {
