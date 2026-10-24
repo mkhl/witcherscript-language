@@ -1,5 +1,9 @@
-use super::super::{completion_members, hover_text, resolve_definition};
+use rstest::rstest;
+
+use super::super::{completion_members, hover_text, resolve_definition, signature_help};
+use super::inlay_hints::hint_labels;
 use crate::builtins::BUILTIN_MAP_URI;
+use crate::diagnostics::collect_arg_count_diagnostics;
 use crate::formatter::ColonSpacing;
 use crate::symbols::AccessLevel;
 use crate::test_support::TestDb;
@@ -23,6 +27,99 @@ fn map_member_params_substitute_key_type() {
         def.symbol.type_annotation,
         Some(Type::from_annotation("bool")),
         "Contains must return bool"
+    );
+}
+
+#[test]
+fn try_get_substitutes_key_and_out_value_types() {
+    let t = TestDb::new("").with_builtins_index();
+    let db = t.db();
+    let def = db
+        .find_member("map<name, CEntity>", "TryGet", AccessLevel::Public)
+        .expect("TryGet should resolve on map<name, CEntity>");
+
+    let params = db.display_parameters_of(&def);
+    let shapes: Vec<_> = params
+        .iter()
+        .map(|p| {
+            (
+                p.name.as_str(),
+                p.specifiers.is_out(),
+                p.type_annotation.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shapes,
+        [
+            ("key", false, Some(Type::from_annotation("name"))),
+            ("value", true, Some(Type::from_annotation("CEntity"))),
+        ],
+        "TryGet must take the key and an out value of the map's value type"
+    );
+    assert_eq!(
+        def.symbol.type_annotation,
+        Some(Type::from_annotation("bool")),
+        "TryGet must return bool"
+    );
+}
+
+#[test]
+fn try_get_signature_help_shows_substituted_out_value() {
+    let t = TestDb::new(concat!(
+        "function Test() {\n",
+        "  var m : map<name, array<int>>;\n",
+        "  var v : array<int>;\n",
+        "  m.TryGet('a', $0v);\n",
+        "}\n",
+    ))
+    .with_builtins_index();
+    let (uri, pos) = t.cursor();
+    let info = signature_help(&uri, t.doc_for(&uri), &t.db(), pos, ColonSpacing::Spaced)
+        .expect("signature help for TryGet");
+
+    assert_eq!(
+        info.label, "TryGet(key : name, out value : array<int>) : bool",
+        "label must show the substituted key and out value types"
+    );
+    assert_eq!(
+        info.active_parameter,
+        Some(1),
+        "cursor on the second argument must activate the value parameter"
+    );
+}
+
+#[test]
+fn try_get_value_argument_is_marked_out_in_inlay_hints() {
+    let t = TestDb::new(concat!(
+        "function Test() {\n",
+        "  var m : map<int, string>;\n",
+        "  var s : string;\n",
+        "  m.TryGet(1, s);\n",
+        "}\n",
+    ))
+    .with_builtins_index();
+    assert_eq!(
+        hint_labels(&t),
+        ["key:", "out value:"],
+        "value argument must be hinted as an out parameter"
+    );
+}
+
+#[rstest]
+#[case::both_args("m.TryGet(1, s);", 0)]
+#[case::missing_value("m.TryGet(1);", 1)]
+fn try_get_requires_key_and_value_arguments(#[case] call: &str, #[case] expected: usize) {
+    let source = format!(
+        "function Test() {{\n  var m : map<int, string>;\n  var s : string;\n  {call}\n}}\n"
+    );
+    let t = TestDb::new(&source).with_builtins_index();
+    let diagnostics = collect_arg_count_diagnostics(&t.search_docs(), &t.db());
+    let count: usize = diagnostics.values().map(Vec::len).sum();
+
+    assert_eq!(
+        count, expected,
+        "{call}: expected {expected} arg-count diagnostic(s), got {diagnostics:?}"
     );
 }
 
@@ -87,7 +184,7 @@ fn completion_after_dot_on_map_var_returns_methods() {
 
     assert_eq!(
         names,
-        ["Clear", "Contains", "Erase", "Key", "Size"],
+        ["Clear", "Contains", "Erase", "Key", "Size", "TryGet"],
         "completion must list exactly the map methods"
     );
 }
